@@ -1,0 +1,360 @@
+// Copyright 2020 Mimir (mimirmim)
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+// this list of conditions and the following disclaimer.
+//
+// 2. Redistributions in binary form must reproduce the above copyright notice,
+// this list of conditions and the following disclaimer in the documentation
+// and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+// LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+// POSSIBILITY OF SUCH DAMAGE.
+
+use rand::prelude::*;
+use rand_distr::{Distribution, LogNormal, Normal, Standard, StandardNormal};
+use std::ops::Range;
+
+static STAKE_REWARD: usize = 50;
+static MAX_SUPPLY: usize = 300_000_000;
+
+static SUPER_BLOCK: usize = 43_200;
+static REWARD_REDUCTION_BLOCK: usize = 525_960;
+
+#[derive(Debug)]
+struct Denoms {
+    d10: usize,
+    d100: usize,
+    d1_000: usize,
+    d10_000: usize,
+}
+
+impl Denoms {
+    fn new(balance: &usize) -> Self {
+        let mut bal_left = balance.to_owned();
+        let mut denoms: Self = Denoms {
+            d10: 0,
+            d100: 0,
+            d1_000: 0,
+            d10_000: 0,
+        };
+        while bal_left >= 10 {
+            if bal_left >= 10_000 {
+                denoms.d10_000 += 1;
+                bal_left -= 10_000;
+            } else if bal_left >= 1_000 {
+                denoms.d1_000 += 1;
+                bal_left -= 1_000;
+            } else if bal_left >= 100 {
+                denoms.d100 += 1;
+                bal_left -= 100;
+            } else if bal_left >= 10 {
+                denoms.d10 += 1;
+                bal_left -= 10;
+            }
+        }
+
+        denoms
+    }
+
+    fn ticket_count(&self) -> f64 {
+        let mut count = 0f64;
+        count += self.d10 as f64;
+        count += self.d100 as f64 * 9.5;
+        count += self.d1_000 as f64 * 90.0;
+        count += self.d10_000 as f64 * 850.0;
+
+        count
+    }
+
+    fn update_denoms(&mut self) {
+        if self.d10 >= 10 {
+            self.d10 -= 10;
+            self.d100 += 1;
+        }
+
+        if self.d100 >= 10 {
+            self.d100 -= 10;
+            self.d1_000 += 1;
+        }
+
+        if self.d1_000 >= 10 {
+            self.d1_000 -= 10;
+            self.d10_000 += 1;
+        }
+    }
+
+    fn get_stake_probability(&self, total_supply: &usize) -> f64 {
+        let adjusted_supply = total_supply / 10;
+        self.ticket_count() as f64 / adjusted_supply as f64
+    }
+}
+
+#[derive(Debug)]
+struct StakeMature {
+    reward: usize,
+    height: usize,
+}
+
+impl StakeMature {
+    fn is_mature(&self) -> bool {
+        self.height <= 0
+    }
+}
+
+#[derive(Debug)]
+struct Staker {
+    id: usize,
+    start_balance: usize,
+    start_pct_total: f64,
+    balance: usize,
+    percent_total: f64,
+    change_pct: f64,
+    denoms: Denoms,
+    stake_count: usize,
+    range: Range<f64>,
+    stakes_maturing: Vec<StakeMature>,
+}
+
+impl Staker {
+    fn new(balance: usize, id: usize, start_pct_total: f64) -> Self {
+        Self {
+            id,
+            denoms: Denoms::new(&balance),
+            start_balance: balance.to_owned(),
+            start_pct_total,
+            balance,
+            percent_total: 0.0,
+            stake_count: 0,
+            range: Range {
+                start: 0.0,
+                end: 0.0,
+            },
+            stakes_maturing: Vec::new(),
+            change_pct: 0.0,
+        }
+    }
+
+    fn hit_stake(&mut self, block_height: usize) {
+        let mut reward: usize;
+
+        if block_height < REWARD_REDUCTION_BLOCK {
+            reward = 5;
+        } else if block_height < REWARD_REDUCTION_BLOCK * 2 {
+            reward = 4;
+        } else if block_height < REWARD_REDUCTION_BLOCK * 3 {
+            reward = 3;
+        } else if block_height < REWARD_REDUCTION_BLOCK * 4 {
+            reward = 2;
+        } else {
+            reward = 1;
+        }
+
+        self.stakes_maturing.push(StakeMature {
+            reward,
+            height: block_height + 1000,
+        });
+        // self.denoms.d10 += reward;
+        self.balance += reward * 10;
+        self.stake_count += 1;
+        self.change_pct = ((self.balance as f64 - self.start_balance as f64)
+            / self.start_balance as f64
+            * 100f64);
+        self.denoms.update_denoms();
+    }
+
+    fn update(&mut self, total_supply: usize) {
+        self.percent_total = self.balance as f64 / total_supply as f64;
+    }
+
+    fn are_stakes_maturing(&mut self) -> bool {
+        !self.stakes_maturing.is_empty()
+    }
+
+    fn stakes_mature(&mut self, block_height: &usize) {
+        let mature = self
+            .stakes_maturing
+            .iter_mut()
+            .find(|p| &p.height <= block_height);
+        if let Some(mature_stake) = mature {
+            self.denoms.d10 += mature_stake.reward;
+            self.stakes_maturing.remove(0);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Network {
+    stakers: Vec<Staker>,
+    total_supply: usize,
+    block: usize,
+}
+
+impl Network {
+    fn new() -> Self {
+        Self {
+            stakers: Vec::new(),
+            total_supply: 43_200 * 50,
+            block: 43_200,
+        }
+    }
+
+    fn create_stakers(&mut self, rng: &mut ThreadRng) {
+        let mut total_staking_supply = self.total_supply as isize;
+        let mut id = 0;
+        loop {
+            let log_normal = LogNormal::new(0.1, 1.5).unwrap();
+            let mut balance = (log_normal.sample(&mut rand::thread_rng()) * 5_000f64) as usize;
+            println!("Creating staker {} with balance {}...", id, balance);
+
+            let left_staking_supply = total_staking_supply - balance as isize;
+            if left_staking_supply < 0 {
+                balance = total_staking_supply as usize;
+                total_staking_supply = 0;
+            } else {
+                total_staking_supply -= balance as isize;
+            }
+
+            self.stakers.push(Staker::new(
+                balance,
+                id,
+                balance as f64 / self.total_supply as f64,
+            ));
+
+            if total_staking_supply == 0 {
+                break;
+            }
+
+            id += 1;
+        }
+    }
+
+    fn find_biggest_staker(&self) -> &Staker {
+        self.stakers.iter().max_by_key(|p| p.balance).unwrap()
+    }
+
+    fn find_smallest_staker(&self) -> &Staker {
+        self.stakers.iter().min_by_key(|p| p.balance).unwrap()
+    }
+
+    fn find_biggest_change(&self) -> &Staker {
+        self.stakers
+            .iter()
+            .max_by_key(|p| p.change_pct as u64)
+            .unwrap()
+    }
+
+    fn find_smallest_change(&self) -> &Staker {
+        self.stakers
+            .iter()
+            .min_by_key(|p| p.change_pct as u64)
+            .unwrap()
+    }
+
+    fn average_change(&self) -> f64 {
+        let mut count: f64 = 0.0;
+        self.stakers.iter().for_each(|p| count += p.change_pct);
+        count / self.stakers.len() as f64
+    }
+
+    fn update_stakers(&mut self) {
+        let total_supply = self.total_supply;
+        self.stakers.iter_mut().for_each(|p| p.update(total_supply));
+    }
+
+    fn update_total_supply(&mut self) {
+        if self.block >= SUPER_BLOCK + 1000 {
+            if self.block < REWARD_REDUCTION_BLOCK {
+                self.total_supply += 50;
+            } else if self.block < REWARD_REDUCTION_BLOCK * 2 {
+                self.total_supply += 40;
+            } else if self.block < REWARD_REDUCTION_BLOCK * 3 {
+                self.total_supply += 30;
+            } else if self.block < REWARD_REDUCTION_BLOCK * 4 {
+                self.total_supply += 20;
+            } else {
+                self.total_supply += 10;
+            }
+        }
+    }
+}
+
+fn stake(network: &mut Network, rng: &mut ThreadRng) {
+    let mut start = 0.0;
+    for mut staker in &mut network.stakers {
+        if staker.are_stakes_maturing() {
+            staker.stakes_mature(&network.block);
+        }
+
+        staker.range = Range {
+            start: 0.0,
+            end: 0.0,
+        };
+        let pct = staker.denoms.get_stake_probability(&network.total_supply);
+        let range = start..start + pct;
+        staker.range = range;
+        start += pct;
+    }
+
+    let winning_pct = rng.gen_range(0.0, start);
+    let winner = network
+        .stakers
+        .iter_mut()
+        .find(|p| p.range.contains(&winning_pct));
+
+    if let Some(winner) = winner {
+        winner.hit_stake(network.block);
+    } else {
+        println!("Impossibruuu!");
+    }
+}
+
+fn main() {
+    let mut rng = rand::thread_rng();
+
+    println!("Creating network.");
+    let mut network = Network::new();
+
+    println!("Creating stakers.");
+    network.create_stakers(&mut rng);
+
+    println!("{} stakers created.", network.stakers.len());
+
+    println!("Staking!");
+    // while network.block <= SUPER_BLOCK + 1 {
+    while network.block <= REWARD_REDUCTION_BLOCK * 10 {
+        stake(&mut network, &mut rng);
+        network.block += 1;
+        network.update_total_supply();
+
+        if network.block % 10000 == 0 {
+            println!("At block {}...", network.block);
+            println!("Total supply at {}...", network.total_supply);
+        }
+    }
+
+    network.update_stakers();
+
+    println!("Changes");
+    println!("{:#?}", network);
+    println!("\nBiggest staker:");
+    println!("{:#?}", network.find_biggest_staker());
+    println!("\nSmallest staker:");
+    println!("{:#?}", network.find_smallest_staker());
+    println!("\nBiggest change %:");
+    println!("{:#?}", network.find_biggest_change());
+    println!("\nSmallest change %:");
+    println!("{:#?}", network.find_smallest_change());
+    println!("\nAverage change %: {}", network.average_change());
+}
