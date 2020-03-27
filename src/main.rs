@@ -74,10 +74,24 @@ impl Denoms {
 
     fn ticket_count(&self) -> f64 {
         let mut count = 0f64;
+
+        // Flat
         count += self.d10 as f64;
-        count += self.d100 as f64 * 9.5;
-        count += self.d1_000 as f64 * 90.0;
-        count += self.d10_000 as f64 * 850.0;
+        count += self.d100 as f64 * 10.0;
+        count += self.d1_000 as f64 * 100.0;
+        count += self.d10_000 as f64 * 1000.0;
+
+        // Mine
+        // count += self.d10 as f64;
+        // count += self.d100 as f64 * 9.5;
+        // count += self.d1_000 as f64 * 90.0;
+        // count += self.d10_000 as f64 * 850.0;
+
+        // Original
+        // count += self.d10 as f64;
+        // count += self.d100 as f64 * 9.0;
+        // count += self.d1_000 as f64 * 80.0;
+        // count += self.d10_000 as f64 * 700.0;
 
         count
     }
@@ -260,8 +274,8 @@ impl Network {
     fn new() -> Self {
         Self {
             stakers: Vec::new(),
-            total_supply: 43_200 * 50,
-            block: 43_200,
+            total_supply: SUPER_BLOCK * STAKE_REWARD * 6, // Start 6 months, gets more stakers.
+            block: SUPER_BLOCK * 6,
         }
     }
 
