@@ -32,7 +32,7 @@ use std::ops::Range;
 
 static STAKE_REWARD: usize = 50;
 static STAKE_REWARD_10_DENOM: usize = STAKE_REWARD / 10;
-static MAX_SUPPLY: usize = 300_000_000;
+// static MAX_SUPPLY: usize = 300_000_000;
 
 static SUPER_BLOCK: usize = 43_200;
 static REWARD_REDUCTION_BLOCK: usize = 525_960;
@@ -307,34 +307,6 @@ impl Network {
 
             id += 1;
         }
-    }
-
-    fn find_biggest_staker(&self) -> &Staker {
-        self.stakers.iter().max_by_key(|p| p.balance).unwrap()
-    }
-
-    fn find_smallest_staker(&self) -> &Staker {
-        self.stakers.iter().min_by_key(|p| p.balance).unwrap()
-    }
-
-    fn find_biggest_change(&self) -> &Staker {
-        self.stakers
-            .iter()
-            .max_by_key(|p| p.change_pct as u64)
-            .unwrap()
-    }
-
-    fn find_smallest_change(&self) -> &Staker {
-        self.stakers
-            .iter()
-            .min_by_key(|p| p.change_pct as u64)
-            .unwrap()
-    }
-
-    fn average_change(&self) -> f64 {
-        let mut count: f64 = 0.0;
-        self.stakers.iter().for_each(|p| count += p.change_pct);
-        count / self.stakers.len() as f64
     }
 
     fn update_stakers(&mut self) {
