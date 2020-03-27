@@ -23,7 +23,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 use rand::prelude::*;
-use rand_distr::{Distribution, LogNormal, Normal, Standard, StandardNormal};
+use rand_distr::{Distribution, LogNormal};
 use std::ops::Range;
 
 static STAKE_REWARD: usize = 50;
@@ -213,8 +213,8 @@ impl Network {
     fn create_stakers(&mut self, rng: &mut ThreadRng) {
         let mut total_staking_supply = self.total_supply as isize;
         let mut id = 0;
+        let log_normal = LogNormal::new(0.1, 1.5).unwrap();
         loop {
-            let log_normal = LogNormal::new(0.1, 1.5).unwrap();
             let mut balance = (log_normal.sample(&mut rand::thread_rng()) * 5_000f64) as usize;
             println!("Creating staker {} with balance {}...", id, balance);
 
@@ -321,7 +321,8 @@ fn stake(network: &mut Network, rng: &mut ThreadRng) {
 }
 
 fn main() {
-    let mut rng = rand::thread_rng();
+    println!("Starting...");
+    let mut rng: ThreadRng = rand::thread_rng();
 
     println!("Creating network.");
     let mut network = Network::new();
