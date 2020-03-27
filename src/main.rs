@@ -46,7 +46,7 @@ struct Denoms {
 }
 
 impl Denoms {
-    fn new(balance: &usize) -> Self {
+    fn new(balance: &usize, denom_strat: usize) -> Self {
         let mut bal_left = balance.to_owned();
         let mut denoms: Self = Denoms {
             d10: 0,
@@ -55,10 +55,7 @@ impl Denoms {
             d10_000: 0,
         };
         while bal_left >= 10 {
-            if bal_left >= 10_000 {
-                denoms.d10_000 += 1;
-                bal_left -= 10_000;
-            } else if bal_left >= 1_000 {
+            if bal_left >= 1_000 {
                 denoms.d1_000 += 1;
                 bal_left -= 1_000;
             } else if bal_left >= 100 {
@@ -69,6 +66,8 @@ impl Denoms {
                 bal_left -= 10;
             }
         }
+
+        denoms.update_denoms(denom_strat);
 
         denoms
     }
@@ -83,20 +82,67 @@ impl Denoms {
         count
     }
 
-    fn update_denoms(&mut self) {
-        if self.d10 >= 10 {
-            self.d10 -= 10;
-            self.d100 += 1;
+    fn update_denoms(&mut self, denom_strat: usize) {
+        // 50/50 1000s, 10,000s
+        if denom_strat == 1 {
+            if self.d10 >= 10 {
+                self.d10 -= 10;
+                self.d100 += 1;
+            }
+
+            if self.d100 >= 10 {
+                self.d100 -= 10;
+                self.d1_000 += 1;
+            }
+
+            if self.d1_000 > 10 && self.d1_000 > self.d10_000 {
+                while self.d1_000 > self.d10_000 && self.d1_000 > 10 {
+                    self.d1_000 -= 10;
+                    self.d10_000 += 1;
+                }
+            }
         }
 
-        if self.d100 >= 10 {
-            self.d100 -= 10;
-            self.d1_000 += 1;
+        // Equal across all denoms
+        if denom_strat == 2 {
+            if self.d10 > 10 && self.d10 > self.d100 {
+                while self.d10 > self.d100 && self.d10 > 10 {
+                    self.d10 -= 10;
+                    self.d100 += 1;
+                }
+            }
+
+            if self.d100 > 10 && self.d100 > self.d1_000 {
+                while self.d100 > self.d1_000 && self.d100 > 10 {
+                    self.d100 -= 10;
+                    self.d1_000 += 1;
+                }
+            }
+
+            if self.d1_000 > 10 && self.d1_000 > self.d10_000 {
+                while self.d1_000 > self.d10_000 && self.d1_000 > 10 {
+                    self.d1_000 -= 10;
+                    self.d10_000 += 1;
+                }
+            }
         }
 
-        if self.d1_000 >= 10 {
-            self.d1_000 -= 10;
-            self.d10_000 += 1;
+        // All to 10,000s
+        if denom_strat == 3 {
+            if self.d10 >= 10 {
+                self.d10 -= 10;
+                self.d100 += 1;
+            }
+
+            if self.d100 >= 10 {
+                self.d100 -= 10;
+                self.d1_000 += 1;
+            }
+
+            if self.d1_000 >= 10 {
+                self.d1_000 -= 10;
+                self.d10_000 += 1;
+            }
         }
     }
 
@@ -120,6 +166,10 @@ struct Staker {
     balance: usize,
     percent_total: f64,
     change_pct: f64,
+    denom_strat: usize,
+    total_stake_count: usize,
+    conf_stake_count: usize,
+    immature_stake_count: usize,
     #[serde(skip_serializing)]
     denoms: Denoms,
     #[serde(skip_serializing)]
@@ -129,50 +179,51 @@ struct Staker {
 }
 
 impl Staker {
-    fn new(balance: usize, id: usize, start_pct_total: f64) -> Self {
+    fn new(balance: usize, id: usize, start_pct_total: f64, rng: &mut ThreadRng) -> Self {
+        let denom_strat = rng.gen_range(1, 4);
         Self {
             id,
-            denoms: Denoms::new(&balance),
+            denoms: Denoms::new(&balance, denom_strat.to_owned()),
+            denom_strat,
             start_balance: balance.to_owned(),
             start_pct_total,
             balance,
             percent_total: 0.0,
-            stake_count: 0,
+            total_stake_count: 0,
+            immature_stake_count: 0,
             range: Range {
                 start: 0.0,
                 end: 0.0,
             },
             stakes_maturing: Vec::new(),
             change_pct: 0.0,
+            conf_stake_count: 0,
         }
     }
 
     fn hit_stake(&mut self, block_height: usize) {
-        let mut reward: usize;
-
-        if block_height < REWARD_REDUCTION_BLOCK {
-            reward = 5;
+        let reward = if block_height < REWARD_REDUCTION_BLOCK {
+            STAKE_REWARD_10_DENOM
         } else if block_height < REWARD_REDUCTION_BLOCK * 2 {
-            reward = 4;
+            STAKE_REWARD_10_DENOM - 1
         } else if block_height < REWARD_REDUCTION_BLOCK * 3 {
-            reward = 3;
+            STAKE_REWARD_10_DENOM - 2
         } else if block_height < REWARD_REDUCTION_BLOCK * 4 {
-            reward = 2;
+            STAKE_REWARD_10_DENOM - 3
         } else {
-            reward = 1;
-        }
+            STAKE_REWARD_10_DENOM - 4
+        };
 
         self.stakes_maturing.push(StakeMature {
             reward,
             height: block_height + 1000,
         });
+        self.immature_stake_count += 1;
         // self.denoms.d10 += reward;
         self.balance += reward * 10;
-        self.stake_count += 1;
-        self.change_pct = ((self.balance as f64 - self.start_balance as f64)
-            / self.start_balance as f64
-            * 100f64);
-        self.denoms.update_denoms();
+        self.total_stake_count += 1;
+        self.change_pct =
+            (self.balance as f64 - self.start_balance as f64) / self.start_balance as f64 * 100f64;
     }
 
     fn update(&mut self, total_supply: usize) {
@@ -189,8 +240,11 @@ impl Staker {
             .iter_mut()
             .find(|p| &p.height <= block_height);
         if let Some(mature_stake) = mature {
+            self.immature_stake_count -= 1;
+            self.conf_stake_count += 1;
             self.denoms.d10 += mature_stake.reward;
             self.stakes_maturing.remove(0);
+            self.denoms.update_denoms(self.denom_strat);
         }
     }
 }
@@ -217,7 +271,6 @@ impl Network {
         let log_normal = LogNormal::new(0.1, 1.5).unwrap();
         loop {
             let mut balance = (log_normal.sample(&mut rand::thread_rng()) * 5_000f64) as usize;
-            println!("Creating staker {} with balance {}...", id, balance);
 
             let left_staking_supply = total_staking_supply - balance as isize;
             if left_staking_supply < 0 {
@@ -231,6 +284,7 @@ impl Network {
                 balance,
                 id,
                 balance as f64 / self.total_supply as f64,
+                rng,
             ));
 
             if total_staking_supply == 0 {
