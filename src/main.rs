@@ -31,6 +31,7 @@ use std::io::Write;
 use std::ops::Range;
 
 static STAKE_REWARD: usize = 50;
+static STAKE_REWARD_10_DENOM: usize = STAKE_REWARD / 10;
 static MAX_SUPPLY: usize = 300_000_000;
 
 static SUPER_BLOCK: usize = 43_200;
@@ -324,28 +325,51 @@ fn main() {
     println!("Starting...");
     let mut rng: ThreadRng = rand::thread_rng();
 
-    println!("Creating network.");
-    let mut network = Network::new();
+    println!("Generating network.");
+    let mut network: Network = Network::new();
 
-    println!("Creating stakers.");
+    println!("Generating stakers.");
     network.create_stakers(&mut rng);
 
-    println!("{} stakers created.", network.stakers.len());
+    println!("{} stakers generated.", network.stakers.len());
 
-    println!("Staking!");
-    // while network.block <= SUPER_BLOCK + 1 {
-    while network.block <= REWARD_REDUCTION_BLOCK * 10 {
+    let end_block = REWARD_REDUCTION_BLOCK * 10;
+    println!("Generating history to block {}.", end_block);
+    while network.block <= end_block {
         stake(&mut network, &mut rng);
         network.block += 1;
         network.update_total_supply();
 
-        if network.block % 10000 == 0 {
-            println!("At block {}...", network.block);
-            println!("Total supply at {}...", network.total_supply);
+        if network.block % 100 == 0 {
+            let pct_done = network.block as f64 / end_block as f64 * 100.0;
+            print!("\rAt block {} of {}.", network.block, end_block);
+
+            print!(" [");
+            let mut pct_check = 0.0;
+            while pct_check != 100.0 {
+                if pct_done >= pct_check {
+                    print!("#");
+                } else {
+                    print!("-");
+                }
+                pct_check += 2.5;
+            }
+            print!("]");
+
+            print!(" {:.2}%", pct_done);
+            io::stdout().flush().unwrap();
+        }
+
+        if network.block == end_block {
+            print!(
+                "\rAt block {} of {}. [########################################] 100.00% done!",
+                network.block, end_block
+            );
+            io::stdout().flush().unwrap();
         }
     }
-
     network.update_stakers();
+    println!("\nBlockchain history generated.");
 
     let json = serde_json::to_string(&network.stakers).unwrap();
     let file_name = "data.json";
