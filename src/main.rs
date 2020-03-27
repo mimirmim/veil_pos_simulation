@@ -24,6 +24,10 @@
 
 use rand::prelude::*;
 use rand_distr::{Distribution, LogNormal};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io;
+use std::io::Write;
 use std::ops::Range;
 
 static STAKE_REWARD: usize = 50;
@@ -32,7 +36,7 @@ static MAX_SUPPLY: usize = 300_000_000;
 static SUPER_BLOCK: usize = 43_200;
 static REWARD_REDUCTION_BLOCK: usize = 525_960;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Denoms {
     d10: usize,
     d100: usize,
@@ -101,19 +105,13 @@ impl Denoms {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct StakeMature {
     reward: usize,
     height: usize,
 }
 
-impl StakeMature {
-    fn is_mature(&self) -> bool {
-        self.height <= 0
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Staker {
     id: usize,
     start_balance: usize,
@@ -121,9 +119,11 @@ struct Staker {
     balance: usize,
     percent_total: f64,
     change_pct: f64,
+    #[serde(skip_serializing)]
     denoms: Denoms,
-    stake_count: usize,
+    #[serde(skip_serializing)]
     range: Range<f64>,
+    #[serde(skip_serializing)]
     stakes_maturing: Vec<StakeMature>,
 }
 
@@ -194,7 +194,7 @@ impl Staker {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Network {
     stakers: Vec<Staker>,
     total_supply: usize,
@@ -347,15 +347,8 @@ fn main() {
 
     network.update_stakers();
 
-    println!("Changes");
-    println!("{:#?}", network);
-    println!("\nBiggest staker:");
-    println!("{:#?}", network.find_biggest_staker());
-    println!("\nSmallest staker:");
-    println!("{:#?}", network.find_smallest_staker());
-    println!("\nBiggest change %:");
-    println!("{:#?}", network.find_biggest_change());
-    println!("\nSmallest change %:");
-    println!("{:#?}", network.find_smallest_change());
-    println!("\nAverage change %: {}", network.average_change());
+    let json = serde_json::to_string(&network.stakers).unwrap();
+    let file_name = "data.json";
+    fs::write("data.json", json).unwrap();
+    println!("JSON written to file {} in the base directory.", file_name);
 }
