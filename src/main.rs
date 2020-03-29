@@ -46,7 +46,7 @@ struct Denoms {
 }
 
 impl Denoms {
-    fn new(balance: &usize, denom_strat: usize) -> Self {
+    fn new(balance: usize, denom_strat: usize) -> Self {
         let mut bal_left = balance.to_owned();
         let mut denoms: Self = Denoms {
             d10: 0,
@@ -160,7 +160,7 @@ impl Denoms {
         }
     }
 
-    fn get_stake_probability(&self, total_supply: &usize) -> f64 {
+    fn get_stake_probability(&self, total_supply: usize) -> f64 {
         let adjusted_supply = total_supply / 10;
         self.ticket_count() as f64 / adjusted_supply as f64
     }
@@ -197,7 +197,7 @@ impl Staker {
         let denom_strat = rng.gen_range(1, 4);
         Self {
             id,
-            denoms: Denoms::new(&balance, denom_strat.to_owned()),
+            denoms: Denoms::new(balance, denom_strat.to_owned()),
             denom_strat,
             start_balance: balance.to_owned(),
             start_pct_total,
@@ -230,7 +230,7 @@ impl Staker {
 
         self.stakes_maturing.push(StakeMature {
             reward,
-            height: block_height + 1000,
+            height: block_height + 27,
         });
         self.immature_stake_count += 1;
         // self.denoms.d10 += reward;
@@ -248,11 +248,11 @@ impl Staker {
         !self.stakes_maturing.is_empty()
     }
 
-    fn stakes_mature(&mut self, block_height: &usize) {
+    fn stakes_mature(&mut self, block_height: usize) {
         let mature = self
             .stakes_maturing
             .iter_mut()
-            .find(|p| &p.height <= block_height);
+            .find(|p| p.height <= block_height);
         if let Some(mature_stake) = mature {
             self.immature_stake_count -= 1;
             self.conf_stake_count += 1;
@@ -334,14 +334,14 @@ impl Network {
         let mut start = 0.0;
         for mut staker in &mut self.stakers {
             if staker.are_stakes_maturing() {
-                staker.stakes_mature(&self.block_height);
+                staker.stakes_mature(self.block_height);
             }
 
             staker.range = Range {
                 start: 0.0,
                 end: 0.0,
             };
-            let pct = staker.denoms.get_stake_probability(&self.total_supply);
+            let pct = staker.denoms.get_stake_probability(self.total_supply);
             let range = start..start + pct;
             staker.range = range;
             start += pct;
