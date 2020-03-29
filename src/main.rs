@@ -267,7 +267,7 @@ impl Staker {
 struct Network {
     stakers: Vec<Staker>,
     total_supply: usize,
-    block: usize,
+    block_height: usize,
 }
 
 impl Network {
@@ -275,7 +275,7 @@ impl Network {
         Self {
             stakers: Vec::new(),
             total_supply: SUPER_BLOCK * STAKE_REWARD * 6, // Start 6 months, gets more stakers.
-            block: SUPER_BLOCK * 6,
+            block_height: SUPER_BLOCK * 6,
         }
     }
 
@@ -315,14 +315,14 @@ impl Network {
     }
 
     fn update_total_supply(&mut self) {
-        if self.block >= SUPER_BLOCK + 1000 {
-            if self.block < REWARD_REDUCTION_BLOCK {
+        if self.block_height >= SUPER_BLOCK + 1000 {
+            if self.block_height < REWARD_REDUCTION_BLOCK {
                 self.total_supply += 50;
-            } else if self.block < REWARD_REDUCTION_BLOCK * 2 {
+            } else if self.block_height < REWARD_REDUCTION_BLOCK * 2 {
                 self.total_supply += 40;
-            } else if self.block < REWARD_REDUCTION_BLOCK * 3 {
+            } else if self.block_height < REWARD_REDUCTION_BLOCK * 3 {
                 self.total_supply += 30;
-            } else if self.block < REWARD_REDUCTION_BLOCK * 4 {
+            } else if self.block_height < REWARD_REDUCTION_BLOCK * 4 {
                 self.total_supply += 20;
             } else {
                 self.total_supply += 10;
@@ -334,7 +334,7 @@ impl Network {
         let mut start = 0.0;
         for mut staker in &mut self.stakers {
             if staker.are_stakes_maturing() {
-                staker.stakes_mature(&self.block);
+                staker.stakes_mature(&self.block_height);
             }
 
             staker.range = Range {
@@ -354,7 +354,7 @@ impl Network {
             .find(|p| p.range.contains(&winning_pct));
 
         if let Some(winner) = winner {
-            winner.hit_stake(self.block);
+            winner.hit_stake(self.block_height);
         } else {
             println!("Impossibruuu!");
         }
@@ -373,20 +373,29 @@ fn main() {
 
     println!("{} stakers generated.", network.stakers.len());
 
-    let end_block = REWARD_REDUCTION_BLOCK * 10;
-    println!("Generating history to block {}.", end_block);
-    while network.block <= end_block {
+    let end_block_height = REWARD_REDUCTION_BLOCK * 10;
+    let starting_block_height = network.block_height;
+    println!(
+        "Generating history from block {} to block {}.",
+        starting_block_height, end_block_height
+    );
+    while network.block_height <= end_block_height {
         network.stake(&mut rng);
-        network.block += 1;
+        network.block_height += 1;
         network.update_total_supply();
 
-        if network.block % 100 == 0 {
-            let pct_done = network.block as f64 / end_block as f64 * 100.0;
-            print!("\rAt block {} of {}.", network.block, end_block);
+        if network.block_height % 100 == 0 {
+            let pct_done = (network.block_height - starting_block_height) as f64
+                / end_block_height as f64
+                * 100.0;
+            print!(
+                "\rAt block {} of {}.",
+                network.block_height, end_block_height
+            );
 
             print!(" [");
             let mut pct_check = 0.0;
-            while pct_check != 100.0 {
+            while pct_check as usize != 100 {
                 if pct_done >= pct_check {
                     print!("#");
                 } else {
@@ -400,10 +409,10 @@ fn main() {
             io::stdout().flush().unwrap();
         }
 
-        if network.block == end_block {
+        if network.block_height == end_block_height {
             print!(
                 "\rAt block {} of {}. [########################################] 100.00% done!",
-                network.block, end_block
+                network.block_height, end_block_height
             );
             io::stdout().flush().unwrap();
         }
