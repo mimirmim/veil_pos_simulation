@@ -329,35 +329,35 @@ impl Network {
             }
         }
     }
-}
 
-fn stake(network: &mut Network, rng: &mut ThreadRng) {
-    let mut start = 0.0;
-    for mut staker in &mut network.stakers {
-        if staker.are_stakes_maturing() {
-            staker.stakes_mature(&network.block);
+    fn stake(&mut self, rng: &mut ThreadRng) {
+        let mut start = 0.0;
+        for mut staker in &mut self.stakers {
+            if staker.are_stakes_maturing() {
+                staker.stakes_mature(&self.block);
+            }
+
+            staker.range = Range {
+                start: 0.0,
+                end: 0.0,
+            };
+            let pct = staker.denoms.get_stake_probability(&self.total_supply);
+            let range = start..start + pct;
+            staker.range = range;
+            start += pct;
         }
 
-        staker.range = Range {
-            start: 0.0,
-            end: 0.0,
-        };
-        let pct = staker.denoms.get_stake_probability(&network.total_supply);
-        let range = start..start + pct;
-        staker.range = range;
-        start += pct;
-    }
+        let winning_pct = rng.gen_range(0.0, start);
+        let winner = self
+            .stakers
+            .iter_mut()
+            .find(|p| p.range.contains(&winning_pct));
 
-    let winning_pct = rng.gen_range(0.0, start);
-    let winner = network
-        .stakers
-        .iter_mut()
-        .find(|p| p.range.contains(&winning_pct));
-
-    if let Some(winner) = winner {
-        winner.hit_stake(network.block);
-    } else {
-        println!("Impossibruuu!");
+        if let Some(winner) = winner {
+            winner.hit_stake(self.block);
+        } else {
+            println!("Impossibruuu!");
+        }
     }
 }
 
@@ -376,7 +376,7 @@ fn main() {
     let end_block = REWARD_REDUCTION_BLOCK * 10;
     println!("Generating history to block {}.", end_block);
     while network.block <= end_block {
-        stake(&mut network, &mut rng);
+        network.stake(&mut rng);
         network.block += 1;
         network.update_total_supply();
 
