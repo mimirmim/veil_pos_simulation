@@ -31,11 +31,23 @@ use std::io::Write;
 use std::ops::Range;
 
 static STAKE_REWARD: usize = 50;
-static STAKE_REWARD_10_DENOM: usize = STAKE_REWARD / 10;
 // static MAX_SUPPLY: usize = 300_000_000;
 
 static SUPER_BLOCK: usize = 43_200;
 static REWARD_REDUCTION_BLOCK: usize = 525_960;
+
+static D10_MOD: f64 = 1.0;
+static D100_MOD: f64 = 9.0;
+static D1_000_MOD: f64 = 80.0;
+static D10_000_MOD: f64 = 700.0;
+
+#[derive(Debug)]
+enum Denom {
+    D10 = 10,
+    D100 = 100,
+    D1000 = 1_000,
+    D10000 = 10_000,
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Denoms {
@@ -75,23 +87,10 @@ impl Denoms {
     fn ticket_count(&self) -> f64 {
         let mut count = 0f64;
 
-        // Flat
-        count += self.d10 as f64;
-        count += self.d100 as f64 * 10.0;
-        count += self.d1_000 as f64 * 100.0;
-        count += self.d10_000 as f64 * 1000.0;
-
-        // Mine
-        // count += self.d10 as f64;
-        // count += self.d100 as f64 * 9.5;
-        // count += self.d1_000 as f64 * 90.0;
-        // count += self.d10_000 as f64 * 850.0;
-
-        // Original
-        // count += self.d10 as f64;
-        // count += self.d100 as f64 * 9.0;
-        // count += self.d1_000 as f64 * 80.0;
-        // count += self.d10_000 as f64 * 700.0;
+        count += self.d10 as f64 * D10_MOD;
+        count += self.d100 as f64 * D100_MOD;
+        count += self.d1_000 as f64 * D1_000_MOD;
+        count += self.d10_000 as f64 * D10_000_MOD;
 
         count
     }
@@ -160,16 +159,44 @@ impl Denoms {
         }
     }
 
-    fn get_stake_probability(&self, total_supply: usize) -> f64 {
+    fn stake_probability(&self, total_supply: usize) -> f64 {
         let adjusted_supply = total_supply / 10;
         self.ticket_count() as f64 / adjusted_supply as f64
+    }
+
+    fn probability(&self, denom: &Denom) -> f64 {
+        use Denom::*;
+        match denom {
+            D10 => self.d10_probability(),
+            D100 => self.d100_probability(),
+            D1000 => self.d1_000_probability(),
+            D10000 => self.d10_000_probability(),
+        }
+    }
+
+    fn d10_probability(&self) -> f64 {
+        (self.d10 as f64 * D10_MOD) / self.ticket_count()
+    }
+
+    fn d100_probability(&self) -> f64 {
+        (self.d100 as f64 * D100_MOD) / self.ticket_count()
+    }
+
+    fn d1_000_probability(&self) -> f64 {
+        (self.d1_000 as f64 * D1_000_MOD) / self.ticket_count()
+    }
+
+    fn d10_000_probability(&self) -> f64 {
+        (self.d10_000 as f64 * D10_000_MOD) / self.ticket_count()
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct StakeMature {
+struct ImmatureBalance {
+    is_stake: bool,
     reward: usize,
     height: usize,
+    mature_height: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -177,7 +204,9 @@ struct Staker {
     id: usize,
     start_balance: usize,
     start_pct_total: f64,
-    balance: usize,
+    balance_spendable: usize,
+    balance_unconfirmed: usize,
+    balance_immature: usize,
     percent_total: f64,
     change_pct: f64,
     denom_strat: usize,
@@ -189,7 +218,7 @@ struct Staker {
     #[serde(skip_serializing)]
     range: Range<f64>,
     #[serde(skip_serializing)]
-    stakes_maturing: Vec<StakeMature>,
+    immature: Vec<ImmatureBalance>,
 }
 
 impl Staker {
@@ -201,7 +230,9 @@ impl Staker {
             denom_strat,
             start_balance: balance.to_owned(),
             start_pct_total,
-            balance,
+            balance_spendable: balance,
+            balance_unconfirmed: 0,
+            balance_immature: 0,
             percent_total: 0.0,
             total_stake_count: 0,
             immature_stake_count: 0,
@@ -209,55 +240,189 @@ impl Staker {
                 start: 0.0,
                 end: 0.0,
             },
-            stakes_maturing: Vec::new(),
+            immature: Vec::new(),
             change_pct: 0.0,
             conf_stake_count: 0,
         }
     }
 
-    fn hit_stake(&mut self, block_height: usize) {
+    fn hit_stake(&mut self, block_height: usize, mut rng: &mut ThreadRng) {
         let reward = if block_height < REWARD_REDUCTION_BLOCK {
-            STAKE_REWARD_10_DENOM
+            STAKE_REWARD
         } else if block_height < REWARD_REDUCTION_BLOCK * 2 {
-            STAKE_REWARD_10_DENOM - 1
+            STAKE_REWARD - 10
         } else if block_height < REWARD_REDUCTION_BLOCK * 3 {
-            STAKE_REWARD_10_DENOM - 2
+            STAKE_REWARD - 20
         } else if block_height < REWARD_REDUCTION_BLOCK * 4 {
-            STAKE_REWARD_10_DENOM - 3
+            STAKE_REWARD - 30
         } else {
-            STAKE_REWARD_10_DENOM - 4
+            STAKE_REWARD - 40
         };
 
-        self.stakes_maturing.push(StakeMature {
+        self.immature.push(ImmatureBalance {
+            is_stake: true,
             reward,
-            height: block_height + 27,
+            height: block_height,
+            mature_height: block_height + 30,
         });
         self.immature_stake_count += 1;
-        // self.denoms.d10 += reward;
-        self.balance += reward * 10;
+        self.balance_spendable += reward;
         self.total_stake_count += 1;
-        self.change_pct =
-            (self.balance as f64 - self.start_balance as f64) / self.start_balance as f64 * 100f64;
+        self.change_pct = (self.balance_spendable as f64 - self.start_balance as f64)
+            / self.start_balance as f64
+            * 100f64;
+
+        self.lock_denom(block_height, &mut rng);
+    }
+
+    fn lock_denom(&mut self, block_height: usize, rng: &mut ThreadRng) {
+        use Denom::*;
+
+        #[derive(Debug)]
+        struct DenomRange {
+            denom: Denom,
+            range: Range<f64>,
+        };
+
+        let mut denom_ranges: Vec<DenomRange> = Vec::new();
+        if self.denoms.d10 > 0 {
+            denom_ranges.push(DenomRange {
+                denom: D10,
+                range: Range {
+                    start: 0.0,
+                    end: 0.0,
+                },
+            })
+        }
+        if self.denoms.d100 > 0 {
+            denom_ranges.push(DenomRange {
+                denom: D100,
+                range: Range {
+                    start: 0.0,
+                    end: 0.0,
+                },
+            })
+        }
+        if self.denoms.d1_000 > 0 {
+            denom_ranges.push(DenomRange {
+                denom: D1000,
+                range: Range {
+                    start: 0.0,
+                    end: 0.0,
+                },
+            })
+        }
+        if self.denoms.d10_000 > 0 {
+            denom_ranges.push(DenomRange {
+                denom: D10000,
+                range: Range {
+                    start: 0.0,
+                    end: 0.0,
+                },
+            })
+        }
+
+        let mut start = 0.0;
+        for mut denom_range in &mut denom_ranges {
+            let pct = self.denoms.probability(&denom_range.denom);
+            let range = start..start + pct;
+            denom_range.range = range;
+            start += pct;
+        }
+
+        let winning_pct = rng.gen_range(0.0, start);
+        let winner = denom_ranges
+            .iter_mut()
+            .find(|p| p.range.contains(&winning_pct));
+
+        if let Some(winner) = winner {
+            // TODO: Make ImmatureBalance once, update after.
+            match winner.denom {
+                D10 => {
+                    self.denoms.d10 -= 1;
+                    self.immature.push(ImmatureBalance {
+                        is_stake: false,
+                        reward: 10,
+                        height: block_height,
+                        mature_height: block_height + 1000,
+                    });
+                }
+                D100 => {
+                    self.denoms.d100 -= 1;
+                    self.immature.push(ImmatureBalance {
+                        is_stake: false,
+                        reward: 100,
+                        height: block_height,
+                        mature_height: block_height + 1000,
+                    });
+                }
+                D1000 => {
+                    self.denoms.d1_000 -= 1;
+                    self.immature.push(ImmatureBalance {
+                        is_stake: false,
+                        reward: 1_000,
+                        height: block_height,
+                        mature_height: block_height + 1000,
+                    });
+                }
+                D10000 => {
+                    self.denoms.d10_000 -= 1;
+                    self.immature.push(ImmatureBalance {
+                        is_stake: false,
+                        reward: 10_000,
+                        height: block_height,
+                        mature_height: block_height + 1000,
+                    });
+                }
+            }
+            self.immature_stake_count += 1;
+        } else {
+            println!("Impossibruuu!");
+        }
     }
 
     fn update(&mut self, total_supply: usize) {
-        self.percent_total = self.balance as f64 / total_supply as f64;
+        self.percent_total = self.balance_spendable as f64 / total_supply as f64;
     }
 
     fn are_stakes_maturing(&mut self) -> bool {
-        !self.stakes_maturing.is_empty()
+        !self.immature.is_empty()
     }
 
-    fn stakes_mature(&mut self, block_height: usize) {
+    // TODO: Balances may be different now.
+    fn mature_balances(&mut self, block_height: usize) {
         let mature = self
-            .stakes_maturing
+            .immature
             .iter_mut()
-            .find(|p| p.height <= block_height);
-        if let Some(mature_stake) = mature {
-            self.immature_stake_count -= 1;
-            self.conf_stake_count += 1;
-            self.denoms.d10 += mature_stake.reward;
-            self.stakes_maturing.remove(0);
+            .enumerate()
+            .find(|p| p.1.mature_height <= block_height);
+        if let Some((pos, mature_stake)) = mature {
+            if mature_stake.is_stake {
+                self.immature_stake_count -= 1;
+                self.conf_stake_count += 1;
+            }
+
+            let mut balance_left = mature_stake.reward;
+            while balance_left > 0 {
+                if balance_left >= 10_000 {
+                    self.denoms.d10_000 += 1;
+                    balance_left -= 10_000;
+                }
+                if balance_left >= 1_000 {
+                    self.denoms.d1_000 += 1;
+                    balance_left -= 1_000;
+                }
+                if balance_left >= 100 {
+                    self.denoms.d100 += 1;
+                    balance_left -= 100;
+                }
+                if balance_left >= 10 {
+                    self.denoms.d10 += 1;
+                    balance_left -= 10;
+                }
+            }
+
+            self.immature.remove(pos);
             self.denoms.update_denoms(self.denom_strat);
         }
     }
@@ -330,18 +495,18 @@ impl Network {
         }
     }
 
-    fn stake(&mut self, rng: &mut ThreadRng) {
+    fn stake(&mut self, mut rng: &mut ThreadRng) {
         let mut start = 0.0;
         for mut staker in &mut self.stakers {
             if staker.are_stakes_maturing() {
-                staker.stakes_mature(self.block_height);
+                staker.mature_balances(self.block_height);
             }
 
             staker.range = Range {
                 start: 0.0,
                 end: 0.0,
             };
-            let pct = staker.denoms.get_stake_probability(self.total_supply);
+            let pct = staker.denoms.stake_probability(self.total_supply);
             let range = start..start + pct;
             staker.range = range;
             start += pct;
@@ -354,7 +519,7 @@ impl Network {
             .find(|p| p.range.contains(&winning_pct));
 
         if let Some(winner) = winner {
-            winner.hit_stake(self.block_height);
+            winner.hit_stake(self.block_height, &mut rng);
         } else {
             println!("Impossibruuu!");
         }
@@ -373,7 +538,7 @@ fn main() {
 
     println!("{} stakers generated.", network.stakers.len());
 
-    let end_block_height = REWARD_REDUCTION_BLOCK * 10;
+    let end_block_height = REWARD_REDUCTION_BLOCK * 1;
     let starting_block_height = network.block_height;
     println!(
         "Generating history from block {} to block {}.",
@@ -422,6 +587,6 @@ fn main() {
 
     let json = serde_json::to_string(&network.stakers).unwrap();
     let file_name = "data.json";
-    fs::write("data.json", json).unwrap();
+    fs::write(file_name, json).unwrap();
     println!("JSON written to file {} in the base directory.", file_name);
 }
