@@ -23,23 +23,31 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 use rand::prelude::*;
-use rand_distr::{Distribution, LogNormal};
+use rand_distr::{Distribution, LogNormal, Normal};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::io::Write;
 use std::ops::Range;
+use std::time::SystemTime;
 
 static STAKE_REWARD: usize = 50;
 // static MAX_SUPPLY: usize = 300_000_000;
-
 static SUPER_BLOCK: usize = 43_200;
 static REWARD_REDUCTION_BLOCK: usize = 525_960;
 
+// static D10_MOD: f64 = 1.0;
+// static D100_MOD: f64 = 9.0;
+// static D1_000_MOD: f64 = 80.0;
+// static D10_000_MOD: f64 = 700.0;
+
 static D10_MOD: f64 = 1.0;
-static D100_MOD: f64 = 9.0;
-static D1_000_MOD: f64 = 80.0;
-static D10_000_MOD: f64 = 700.0;
+static D100_MOD: f64 = 9.5;
+static D1_000_MOD: f64 = 90.0;
+static D10_000_MOD: f64 = 850.0;
+
+static DENOM_THRESHOLD_MIN: usize = 0;
+static DENOM_THRESHOLD_MAX: usize = 20_000;
 
 #[derive(Debug)]
 enum Denom {
@@ -48,6 +56,18 @@ enum Denom {
     D1000 = 1_000,
     D10000 = 10_000,
 }
+
+// TODO: Change numbers to these.
+// enum DenomStrategy {
+//     Only10,
+//     Only100,
+//     Only1000,
+//     Only10000,
+//     Half10And100,
+//     Half100And1000,
+//     Half1000And10000,
+//     AllEqual,
+// }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Denoms {
@@ -157,6 +177,29 @@ impl Denoms {
                 self.d10_000 += 1;
             }
         }
+
+        // All 100s
+        if denom_strat == 4 && self.d10 > 10 && self.d10 > self.d100 {
+            while self.d10 > self.d100 && self.d10 > 10 {
+                self.d10 -= 10;
+                self.d100 += 1;
+            }
+        }
+
+        // All 100s and 1,000s 50/50
+        if denom_strat == 5 {
+            if self.d10 >= 10 {
+                self.d10 -= 10;
+                self.d100 += 1;
+            }
+
+            if self.d100 > 10 && self.d100 > self.d1_000 {
+                while self.d100 > self.d1_000 && self.d100 > 10 {
+                    self.d100 -= 10;
+                    self.d1_000 += 1;
+                }
+            }
+        }
     }
 
     fn stake_probability(&self, total_supply: usize) -> f64 {
@@ -189,6 +232,15 @@ impl Denoms {
     fn d10_000_probability(&self) -> f64 {
         (self.d10_000 as f64 * D10_000_MOD) / self.ticket_count()
     }
+
+    fn count(&self) -> usize {
+        let mut count = 0;
+        count += self.d10;
+        count += self.d100;
+        count += self.d1_000;
+        count += self.d10_000;
+        count
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,14 +257,17 @@ struct Staker {
     start_balance: usize,
     start_pct_total: f64,
     balance_spendable: usize,
-    balance_unconfirmed: usize,
     balance_immature: usize,
     percent_total: f64,
     change_pct: f64,
     denom_strat: usize,
+    denom_threshold: usize,
+    computer_strength: f64,
     total_stake_count: usize,
     conf_stake_count: usize,
     immature_stake_count: usize,
+    // TODO transaction count? Happens everytime denoms move.
+    orphaned_count: usize,
     #[serde(skip_serializing)]
     denoms: Denoms,
     #[serde(skip_serializing)]
@@ -223,19 +278,31 @@ struct Staker {
 
 impl Staker {
     fn new(balance: usize, id: usize, start_pct_total: f64, rng: &mut ThreadRng) -> Self {
-        let denom_strat = rng.gen_range(1, 4);
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let denom_strat = rng.gen_range(0, 6);
+        let computer_strength = normal.sample(rng);
+
+        let x: f64 = computer_strength;
+        let in_min: f64 = -5.0;
+        let in_max: f64 = 5.0;
+        let out_min: f64 = DENOM_THRESHOLD_MIN as f64;
+        let out_max: f64 = DENOM_THRESHOLD_MAX as f64;
+        let result: f64 = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+
         Self {
             id,
             denoms: Denoms::new(balance, denom_strat.to_owned()),
             denom_strat,
+            denom_threshold: result as usize,
+            computer_strength,
             start_balance: balance.to_owned(),
             start_pct_total,
             balance_spendable: balance,
-            balance_unconfirmed: 0,
             balance_immature: 0,
             percent_total: 0.0,
             total_stake_count: 0,
             immature_stake_count: 0,
+            orphaned_count: 0,
             range: Range {
                 start: 0.0,
                 end: 0.0,
@@ -247,6 +314,14 @@ impl Staker {
     }
 
     fn hit_stake(&mut self, block_height: usize, mut rng: &mut ThreadRng) {
+        if self.denoms.count() > self.denom_threshold {
+            let res = rng.gen_range(0, self.denoms.count());
+            if res > self.denom_threshold {
+                self.orphaned_count += 1;
+                return;
+            }
+        }
+
         let reward = if block_height < REWARD_REDUCTION_BLOCK {
             STAKE_REWARD
         } else if block_height < REWARD_REDUCTION_BLOCK * 2 {
@@ -375,7 +450,6 @@ impl Staker {
                     });
                 }
             }
-            self.immature_stake_count += 1;
         } else {
             println!("Impossibruuu!");
         }
@@ -396,13 +470,13 @@ impl Staker {
             .iter_mut()
             .enumerate()
             .find(|p| p.1.mature_height <= block_height);
-        if let Some((pos, mature_stake)) = mature {
-            if mature_stake.is_stake {
+        if let Some((pos, mature_balance)) = mature {
+            if mature_balance.is_stake {
                 self.immature_stake_count -= 1;
                 self.conf_stake_count += 1;
             }
 
-            let mut balance_left = mature_stake.reward;
+            let mut balance_left = mature_balance.reward;
             while balance_left > 0 {
                 if balance_left >= 10_000 {
                     self.denoms.d10_000 += 1;
@@ -538,12 +612,13 @@ fn main() {
 
     println!("{} stakers generated.", network.stakers.len());
 
-    let end_block_height = REWARD_REDUCTION_BLOCK * 1;
+    let end_block_height = REWARD_REDUCTION_BLOCK * 10;
     let starting_block_height = network.block_height;
     println!(
         "Generating history from block {} to block {}.",
         starting_block_height, end_block_height
     );
+    let mut now = SystemTime::now();
     while network.block_height <= end_block_height {
         network.stake(&mut rng);
         network.block_height += 1;
