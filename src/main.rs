@@ -709,7 +709,8 @@ fn main() {
         "Generating history from block {} to block {}.",
         starting_block_height, end_block_height
     );
-    let mut now = SystemTime::now();
+    // TODO: Fix time
+    // let mut now = SystemTime::now();
     while network.block_height <= end_block_height {
         network.stake(&mut rng);
         network.block_height += 1;
@@ -738,18 +739,18 @@ fn main() {
 
             print!(" {:.2}%", pct_done);
 
-            if network.block_height % 10000 == 0 {
-                let elapsed = now.elapsed().unwrap().as_secs_f64();
-                let seconds_left =
-                    ((end_block_height - network.block_height) as f64) / 10_000.0 * elapsed;
-                if seconds_left > 60.0 {
-                    let minutes_left = seconds_left / 60.0;
-                    print!(" {:.2} minutes left.", minutes_left);
-                } else {
-                    print!(" {:.0} seconds left.", seconds_left);
-                }
-                now = SystemTime::now();
-            }
+            // if network.block_height % 100 == 0 {
+            //     let elapsed = now.elapsed().unwrap().as_secs_f64();
+            //     let seconds_left =
+            //         ((end_block_height - network.block_height) as f64) / 10_000.0 * elapsed;
+            //     if seconds_left > 60.0 {
+            //         let minutes_left = seconds_left / 60.0;
+            //         print!(" {:.2} minutes left.    ", minutes_left);
+            //     } else {
+            //         print!(" {:.0} seconds left.    ", seconds_left);
+            //     }
+            //     now = SystemTime::now();
+            // }
 
             io::stdout().flush().unwrap();
         }
