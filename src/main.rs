@@ -67,10 +67,26 @@ enum Denom {
 //     Half100And1000,
 //     Half1000And10000,
 //     AllEqual,
+//     Optimal,
 // }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct ImmatureBalance {
+    is_stake: bool,
+    reward: usize,
+    height: usize,
+    mature_height: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct Denoms {
+    initial_state: bool,
+    denom_strat: usize,
+    denom_threshold: usize,
+    total_stake_count: usize,
+    conf_stake_count: usize,
+    immature_stake_count: usize,
+    immature: Vec<ImmatureBalance>,
     d10: usize,
     d100: usize,
     d1_000: usize,
@@ -78,9 +94,16 @@ struct Denoms {
 }
 
 impl Denoms {
-    fn new(balance: usize, denom_strat: usize) -> Self {
+    fn new(balance: usize, denom_strat: usize, denom_threshold: usize) -> Self {
         let mut bal_left = balance.to_owned();
         let mut denoms: Self = Denoms {
+            initial_state: true,
+            denom_strat,
+            denom_threshold,
+            total_stake_count: 0,
+            conf_stake_count: 0,
+            immature_stake_count: 0,
+            immature: Vec::new(),
             d10: 0,
             d100: 0,
             d1_000: 0,
@@ -99,7 +122,9 @@ impl Denoms {
             }
         }
 
-        denoms.update_denoms(denom_strat);
+        denoms.update_denoms(0);
+
+        denoms.initial_state = false;
 
         denoms
     }
@@ -115,9 +140,9 @@ impl Denoms {
         count
     }
 
-    fn update_denoms(&mut self, denom_strat: usize) {
+    fn update_denoms(&mut self, block_height: usize) {
         // 50/50 1000s, 10,000s
-        if denom_strat == 1 {
+        if self.denom_strat == 1 {
             if self.d10 >= 10 {
                 self.d10 -= 10;
                 self.d100 += 1;
@@ -137,7 +162,7 @@ impl Denoms {
         }
 
         // Equal across all denoms
-        if denom_strat == 2 {
+        if self.denom_strat == 2 {
             if self.d10 > 10 && self.d10 > self.d100 {
                 while self.d10 > self.d100 && self.d10 > 10 {
                     self.d10 -= 10;
@@ -160,26 +185,12 @@ impl Denoms {
             }
         }
 
-        // All to 10,000s
-        if denom_strat == 3 {
-            if self.d10 >= 10 {
-                self.d10 -= 10;
-                self.d100 += 1;
-            }
-
-            if self.d100 >= 10 {
-                self.d100 -= 10;
-                self.d1_000 += 1;
-            }
-
-            if self.d1_000 >= 10 {
-                self.d1_000 -= 10;
-                self.d10_000 += 1;
-            }
+        if self.denom_strat == 3 {
+            self.denoms_to_10_000();
         }
 
         // All 100s
-        if denom_strat == 4 && self.d10 > 10 && self.d10 > self.d100 {
+        if self.denom_strat == 4 && self.d10 > 10 && self.d10 > self.d100 {
             while self.d10 > self.d100 && self.d10 > 10 {
                 self.d10 -= 10;
                 self.d100 += 1;
@@ -187,7 +198,7 @@ impl Denoms {
         }
 
         // All 100s and 1,000s 50/50
-        if denom_strat == 5 {
+        if self.denom_strat == 5 {
             if self.d10 >= 10 {
                 self.d10 -= 10;
                 self.d100 += 1;
@@ -199,6 +210,109 @@ impl Denoms {
                     self.d1_000 += 1;
                 }
             }
+        }
+
+        // Move all to 10s then work up until you are at an optimal amount of denoms
+        if self.denom_strat == 6 {
+            if self.initial_state {
+                self.denoms_to_d10();
+            }
+
+            if self.count() > self.denom_threshold && self.d10 > 10 {
+                // delete
+                while self.d10 > 10 {
+                    self.d10 -= 10;
+                    if !self.initial_state {
+                        self.immature.push(ImmatureBalance {
+                            is_stake: false,
+                            reward: 100,
+                            height: block_height,
+                            mature_height: block_height + 1000,
+                        });
+                    } else {
+                        self.d100 += 1;
+                    }
+
+                    if self.count() < self.denom_threshold {
+                        break;
+                    }
+                }
+            }
+
+            if self.count() > self.denom_threshold && self.d100 > 10 {
+                while self.d100 > 10 {
+                    self.d100 -= 10;
+                    if !self.initial_state {
+                        self.immature.push(ImmatureBalance {
+                            is_stake: false,
+                            reward: 1_000,
+                            height: block_height,
+                            mature_height: block_height + 1000,
+                        });
+                        self.immature_stake_count += 1;
+                    } else {
+                        self.d1_000 += 1;
+                    }
+
+                    if self.count() < self.denom_threshold {
+                        break;
+                    }
+                }
+            }
+
+            if self.count() > self.denom_threshold && self.d1_000 > 10 {
+                while self.d1_000 > 10 {
+                    self.d1_000 -= 10;
+                    if !self.initial_state {
+                        self.immature.push(ImmatureBalance {
+                            is_stake: false,
+                            reward: 10_000,
+                            height: block_height,
+                            mature_height: block_height + 1000,
+                        });
+                    } else {
+                        self.d10_000 += 1;
+                    }
+
+                    if self.count() < self.denom_threshold {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn denoms_to_d10(&mut self) {
+        if self.d10_000 >= 1 {
+            self.d1_000 += self.d10_000 * 10;
+            self.d10_000 = 0;
+        }
+
+        if self.d1_000 >= 1 {
+            self.d100 += self.d1_000 * 10;
+            self.d1_000 = 0;
+        }
+
+        if self.d100 >= 1 {
+            self.d10 += self.d100 * 10;
+            self.d100 = 0;
+        }
+    }
+
+    fn denoms_to_10_000(&mut self) {
+        if self.d10 >= 10 {
+            self.d10 -= 10;
+            self.d100 += 1;
+        }
+
+        if self.d100 >= 10 {
+            self.d100 -= 10;
+            self.d1_000 += 1;
+        }
+
+        if self.d1_000 >= 10 {
+            self.d1_000 -= 10;
+            self.d10_000 += 1;
         }
     }
 
@@ -244,14 +358,6 @@ impl Denoms {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ImmatureBalance {
-    is_stake: bool,
-    reward: usize,
-    height: usize,
-    mature_height: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct Staker {
     id: usize,
     start_balance: usize,
@@ -260,26 +366,19 @@ struct Staker {
     balance_immature: usize,
     percent_total: f64,
     change_pct: f64,
-    denom_strat: usize,
-    denom_threshold: usize,
     computer_strength: f64,
-    total_stake_count: usize,
-    conf_stake_count: usize,
-    immature_stake_count: usize,
     // TODO transaction count? Happens everytime denoms move.
     orphaned_count: usize,
     #[serde(skip_serializing)]
     denoms: Denoms,
     #[serde(skip_serializing)]
     range: Range<f64>,
-    #[serde(skip_serializing)]
-    immature: Vec<ImmatureBalance>,
 }
 
 impl Staker {
     fn new(balance: usize, id: usize, start_pct_total: f64, rng: &mut ThreadRng) -> Self {
         let normal = Normal::new(0.0, 1.0).unwrap();
-        let denom_strat = rng.gen_range(0, 6);
+        let denom_strat = rng.gen_range(0, 7);
         let computer_strength = normal.sample(rng);
 
         let x: f64 = computer_strength;
@@ -291,32 +390,26 @@ impl Staker {
 
         Self {
             id,
-            denoms: Denoms::new(balance, denom_strat.to_owned()),
-            denom_strat,
-            denom_threshold: result as usize,
+            denoms: Denoms::new(balance, denom_strat.to_owned(), result as usize),
             computer_strength,
             start_balance: balance.to_owned(),
             start_pct_total,
             balance_spendable: balance,
             balance_immature: 0,
             percent_total: 0.0,
-            total_stake_count: 0,
-            immature_stake_count: 0,
             orphaned_count: 0,
             range: Range {
                 start: 0.0,
                 end: 0.0,
             },
-            immature: Vec::new(),
             change_pct: 0.0,
-            conf_stake_count: 0,
         }
     }
 
     fn hit_stake(&mut self, block_height: usize, mut rng: &mut ThreadRng) {
-        if self.denoms.count() > self.denom_threshold {
+        if self.denoms.count() > self.denoms.denom_threshold {
             let res = rng.gen_range(0, self.denoms.count());
-            if res > self.denom_threshold {
+            if res > self.denoms.denom_threshold {
                 self.orphaned_count += 1;
                 return;
             }
@@ -334,18 +427,15 @@ impl Staker {
             STAKE_REWARD - 40
         };
 
-        self.immature.push(ImmatureBalance {
+        self.denoms.immature.push(ImmatureBalance {
             is_stake: true,
             reward,
             height: block_height,
             mature_height: block_height + 30,
         });
-        self.immature_stake_count += 1;
+        self.denoms.immature_stake_count += 1;
         self.balance_spendable += reward;
-        self.total_stake_count += 1;
-        self.change_pct = (self.balance_spendable as f64 - self.start_balance as f64)
-            / self.start_balance as f64
-            * 100f64;
+        self.denoms.total_stake_count += 1;
 
         self.lock_denom(block_height, &mut rng);
     }
@@ -415,7 +505,7 @@ impl Staker {
             match winner.denom {
                 D10 => {
                     self.denoms.d10 -= 1;
-                    self.immature.push(ImmatureBalance {
+                    self.denoms.immature.push(ImmatureBalance {
                         is_stake: false,
                         reward: 10,
                         height: block_height,
@@ -424,7 +514,7 @@ impl Staker {
                 }
                 D100 => {
                     self.denoms.d100 -= 1;
-                    self.immature.push(ImmatureBalance {
+                    self.denoms.immature.push(ImmatureBalance {
                         is_stake: false,
                         reward: 100,
                         height: block_height,
@@ -433,7 +523,7 @@ impl Staker {
                 }
                 D1000 => {
                     self.denoms.d1_000 -= 1;
-                    self.immature.push(ImmatureBalance {
+                    self.denoms.immature.push(ImmatureBalance {
                         is_stake: false,
                         reward: 1_000,
                         height: block_height,
@@ -442,7 +532,7 @@ impl Staker {
                 }
                 D10000 => {
                     self.denoms.d10_000 -= 1;
-                    self.immature.push(ImmatureBalance {
+                    self.denoms.immature.push(ImmatureBalance {
                         is_stake: false,
                         reward: 10_000,
                         height: block_height,
@@ -457,23 +547,24 @@ impl Staker {
 
     fn update(&mut self, total_supply: usize) {
         self.percent_total = self.balance_spendable as f64 / total_supply as f64;
+        self.change_pct = self.percent_total / self.start_pct_total;
     }
 
     fn are_stakes_maturing(&mut self) -> bool {
-        !self.immature.is_empty()
+        !self.denoms.immature.is_empty()
     }
 
-    // TODO: Balances may be different now.
     fn mature_balances(&mut self, block_height: usize) {
         let mature = self
+            .denoms
             .immature
             .iter_mut()
             .enumerate()
             .find(|p| p.1.mature_height <= block_height);
         if let Some((pos, mature_balance)) = mature {
             if mature_balance.is_stake {
-                self.immature_stake_count -= 1;
-                self.conf_stake_count += 1;
+                self.denoms.immature_stake_count -= 1;
+                self.denoms.conf_stake_count += 1;
             }
 
             let mut balance_left = mature_balance.reward;
@@ -496,8 +587,8 @@ impl Staker {
                 }
             }
 
-            self.immature.remove(pos);
-            self.denoms.update_denoms(self.denom_strat);
+            self.denoms.immature.remove(pos);
+            self.denoms.update_denoms(block_height);
         }
     }
 }
