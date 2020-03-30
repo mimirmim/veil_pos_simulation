@@ -41,10 +41,15 @@ static REWARD_REDUCTION_BLOCK: usize = 525_960;
 // static D1_000_MOD: f64 = 80.0;
 // static D10_000_MOD: f64 = 700.0;
 
+// static D10_MOD: f64 = 1.0;
+// static D100_MOD: f64 = 9.5;
+// static D1_000_MOD: f64 = 90.0;
+// static D10_000_MOD: f64 = 850.0;
+
 static D10_MOD: f64 = 1.0;
-static D100_MOD: f64 = 9.5;
-static D1_000_MOD: f64 = 90.0;
-static D10_000_MOD: f64 = 850.0;
+static D100_MOD: f64 = 10.0;
+static D1_000_MOD: f64 = 100.0;
+static D10_000_MOD: f64 = 1000.0;
 
 static DENOM_THRESHOLD_MIN: usize = 0;
 static DENOM_THRESHOLD_MAX: usize = 20_000;
