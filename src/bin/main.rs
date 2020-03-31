@@ -31,349 +31,27 @@ use std::io::Write;
 use std::ops::Range;
 use std::time::SystemTime;
 
-static STAKE_REWARD: usize = 50;
-// static MAX_SUPPLY: usize = 300_000_000;
-static SUPER_BLOCK: usize = 43_200;
-static REWARD_REDUCTION_BLOCK: usize = 525_960;
-
-// static D10_MOD: f64 = 1.0;
-// static D100_MOD: f64 = 9.0;
-// static D1_000_MOD: f64 = 80.0;
-// static D10_000_MOD: f64 = 700.0;
-
-// static D10_MOD: f64 = 1.0;
-// static D100_MOD: f64 = 9.5;
-// static D1_000_MOD: f64 = 90.0;
-// static D10_000_MOD: f64 = 850.0;
-
-static D10_MOD: f64 = 1.0;
-static D100_MOD: f64 = 10.0;
-static D1_000_MOD: f64 = 100.0;
-static D10_000_MOD: f64 = 1000.0;
-
-static DENOM_THRESHOLD_MIN: usize = 0;
-static DENOM_THRESHOLD_MAX: usize = 20_000;
-
-#[derive(Debug)]
-enum Denom {
-    D10 = 10,
-    D100 = 100,
-    D1000 = 1_000,
-    D10000 = 10_000,
-}
+static STAKE_REWARD: u64 = 50;
+// static MAX_SUPPLY: u64 = 300_000_000;
+static SUPER_BLOCK: u64 = 43_200;
+static REWARD_REDUCTION_BLOCK: u64 = 525_960;
 
 // TODO: Change numbers to these.
-// enum DenomStrategy {
-//     Only10,
-//     Only100,
-//     Only1000,
-//     Only10000,
-//     Half10And100,
-//     Half100And1000,
-//     Half1000And10000,
-//     AllEqual,
-//     Optimal,
-// }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-struct ImmatureBalance {
-    is_stake: bool,
-    reward: usize,
-    height: usize,
-    mature_height: usize,
-}
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-struct Denoms {
-    initial_state: bool,
-    denom_strat: usize,
-    denom_threshold: usize,
-    total_stake_count: usize,
-    conf_stake_count: usize,
-    immature_stake_count: usize,
-    immature: Vec<ImmatureBalance>,
-    d10: usize,
-    d100: usize,
-    d1_000: usize,
-    d10_000: usize,
-}
-
-impl Denoms {
-    fn new(balance: usize, denom_strat: usize, denom_threshold: usize) -> Self {
-        let mut bal_left = balance.to_owned();
-        let mut denoms: Self = Denoms {
-            initial_state: true,
-            denom_strat,
-            denom_threshold,
-            total_stake_count: 0,
-            conf_stake_count: 0,
-            immature_stake_count: 0,
-            immature: Vec::new(),
-            d10: 0,
-            d100: 0,
-            d1_000: 0,
-            d10_000: 0,
-        };
-        while bal_left >= 10 {
-            if bal_left >= 1_000 {
-                denoms.d1_000 += 1;
-                bal_left -= 1_000;
-            } else if bal_left >= 100 {
-                denoms.d100 += 1;
-                bal_left -= 100;
-            } else if bal_left >= 10 {
-                denoms.d10 += 1;
-                bal_left -= 10;
-            }
-        }
-
-        denoms.update_denoms(0);
-
-        denoms.initial_state = false;
-
-        denoms
-    }
-
-    fn ticket_count(&self) -> f64 {
-        let mut count = 0f64;
-
-        count += self.d10 as f64 * D10_MOD;
-        count += self.d100 as f64 * D100_MOD;
-        count += self.d1_000 as f64 * D1_000_MOD;
-        count += self.d10_000 as f64 * D10_000_MOD;
-
-        count
-    }
-
-    fn update_denoms(&mut self, block_height: usize) {
-        // 50/50 1000s, 10,000s
-        if self.denom_strat == 1 {
-            if self.d10 >= 10 {
-                self.d10 -= 10;
-                self.d100 += 1;
-            }
-
-            if self.d100 >= 10 {
-                self.d100 -= 10;
-                self.d1_000 += 1;
-            }
-
-            if self.d1_000 > 10 && self.d1_000 > self.d10_000 {
-                while self.d1_000 > self.d10_000 && self.d1_000 > 10 {
-                    self.d1_000 -= 10;
-                    self.d10_000 += 1;
-                }
-            }
-        }
-
-        // Equal across all denoms
-        if self.denom_strat == 2 {
-            if self.d10 > 10 && self.d10 > self.d100 {
-                while self.d10 > self.d100 && self.d10 > 10 {
-                    self.d10 -= 10;
-                    self.d100 += 1;
-                }
-            }
-
-            if self.d100 > 10 && self.d100 > self.d1_000 {
-                while self.d100 > self.d1_000 && self.d100 > 10 {
-                    self.d100 -= 10;
-                    self.d1_000 += 1;
-                }
-            }
-
-            if self.d1_000 > 10 && self.d1_000 > self.d10_000 {
-                while self.d1_000 > self.d10_000 && self.d1_000 > 10 {
-                    self.d1_000 -= 10;
-                    self.d10_000 += 1;
-                }
-            }
-        }
-
-        if self.denom_strat == 3 {
-            self.denoms_to_10_000();
-        }
-
-        // All 100s
-        if self.denom_strat == 4 && self.d10 > 10 && self.d10 > self.d100 {
-            while self.d10 > self.d100 && self.d10 > 10 {
-                self.d10 -= 10;
-                self.d100 += 1;
-            }
-        }
-
-        // All 100s and 1,000s 50/50
-        if self.denom_strat == 5 {
-            if self.d10 >= 10 {
-                self.d10 -= 10;
-                self.d100 += 1;
-            }
-
-            if self.d100 > 10 && self.d100 > self.d1_000 {
-                while self.d100 > self.d1_000 && self.d100 > 10 {
-                    self.d100 -= 10;
-                    self.d1_000 += 1;
-                }
-            }
-        }
-
-        // Move all to 10s then work up until you are at an optimal amount of denoms
-        if self.denom_strat == 6 {
-            if self.initial_state {
-                self.denoms_to_d10();
-            }
-
-            if self.count() > self.denom_threshold && self.d10 > 10 {
-                // delete
-                while self.d10 > 10 {
-                    self.d10 -= 10;
-                    if !self.initial_state {
-                        self.immature.push(ImmatureBalance {
-                            is_stake: false,
-                            reward: 100,
-                            height: block_height,
-                            mature_height: block_height + 1000,
-                        });
-                    } else {
-                        self.d100 += 1;
-                    }
-
-                    if self.count() < self.denom_threshold {
-                        break;
-                    }
-                }
-            }
-
-            if self.count() > self.denom_threshold && self.d100 > 10 {
-                while self.d100 > 10 {
-                    self.d100 -= 10;
-                    if !self.initial_state {
-                        self.immature.push(ImmatureBalance {
-                            is_stake: false,
-                            reward: 1_000,
-                            height: block_height,
-                            mature_height: block_height + 1000,
-                        });
-                        self.immature_stake_count += 1;
-                    } else {
-                        self.d1_000 += 1;
-                    }
-
-                    if self.count() < self.denom_threshold {
-                        break;
-                    }
-                }
-            }
-
-            if self.count() > self.denom_threshold && self.d1_000 > 10 {
-                while self.d1_000 > 10 {
-                    self.d1_000 -= 10;
-                    if !self.initial_state {
-                        self.immature.push(ImmatureBalance {
-                            is_stake: false,
-                            reward: 10_000,
-                            height: block_height,
-                            mature_height: block_height + 1000,
-                        });
-                    } else {
-                        self.d10_000 += 1;
-                    }
-
-                    if self.count() < self.denom_threshold {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    fn denoms_to_d10(&mut self) {
-        if self.d10_000 >= 1 {
-            self.d1_000 += self.d10_000 * 10;
-            self.d10_000 = 0;
-        }
-
-        if self.d1_000 >= 1 {
-            self.d100 += self.d1_000 * 10;
-            self.d1_000 = 0;
-        }
-
-        if self.d100 >= 1 {
-            self.d10 += self.d100 * 10;
-            self.d100 = 0;
-        }
-    }
-
-    fn denoms_to_10_000(&mut self) {
-        if self.d10 >= 10 {
-            self.d10 -= 10;
-            self.d100 += 1;
-        }
-
-        if self.d100 >= 10 {
-            self.d100 -= 10;
-            self.d1_000 += 1;
-        }
-
-        if self.d1_000 >= 10 {
-            self.d1_000 -= 10;
-            self.d10_000 += 1;
-        }
-    }
-
-    fn stake_probability(&self, total_supply: usize) -> f64 {
-        let adjusted_supply = total_supply / 10;
-        self.ticket_count() as f64 / adjusted_supply as f64
-    }
-
-    fn probability(&self, denom: &Denom) -> f64 {
-        use Denom::*;
-        match denom {
-            D10 => self.d10_probability(),
-            D100 => self.d100_probability(),
-            D1000 => self.d1_000_probability(),
-            D10000 => self.d10_000_probability(),
-        }
-    }
-
-    fn d10_probability(&self) -> f64 {
-        (self.d10 as f64 * D10_MOD) / self.ticket_count()
-    }
-
-    fn d100_probability(&self) -> f64 {
-        (self.d100 as f64 * D100_MOD) / self.ticket_count()
-    }
-
-    fn d1_000_probability(&self) -> f64 {
-        (self.d1_000 as f64 * D1_000_MOD) / self.ticket_count()
-    }
-
-    fn d10_000_probability(&self) -> f64 {
-        (self.d10_000 as f64 * D10_000_MOD) / self.ticket_count()
-    }
-
-    fn count(&self) -> usize {
-        let mut count = 0;
-        count += self.d10;
-        count += self.d100;
-        count += self.d1_000;
-        count += self.d10_000;
-        count
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Staker {
-    id: usize,
-    start_balance: usize,
+    id: u64,
+    start_balance: u64,
     start_pct_total: f64,
-    balance_spendable: usize,
-    balance_immature: usize,
+    balance_spendable: u64,
+    balance_immature: u64,
     percent_total: f64,
     change_pct: f64,
     computer_strength: f64,
     // TODO transaction count? Happens everytime denoms move.
-    orphaned_count: usize,
+    orphaned_count: u64,
     #[serde(skip_serializing)]
     denoms: Denoms,
     #[serde(skip_serializing)]
@@ -381,7 +59,7 @@ struct Staker {
 }
 
 impl Staker {
-    fn new(balance: usize, id: usize, start_pct_total: f64, rng: &mut ThreadRng) -> Self {
+    fn new(balance: u64, id: u64, start_pct_total: f64, rng: &mut ThreadRng) -> Self {
         let normal = Normal::new(0.0, 1.0).unwrap();
         let denom_strat = rng.gen_range(0, 7);
         let computer_strength = normal.sample(rng);
@@ -395,7 +73,7 @@ impl Staker {
 
         Self {
             id,
-            denoms: Denoms::new(balance, denom_strat.to_owned(), result as usize),
+            denoms: Denoms::new(balance, denom_strat.to_owned(), result as u64),
             computer_strength,
             start_balance: balance.to_owned(),
             start_pct_total,
@@ -411,7 +89,7 @@ impl Staker {
         }
     }
 
-    fn hit_stake(&mut self, block_height: usize, mut rng: &mut ThreadRng) {
+    fn hit_stake(&mut self, block_height: u64, mut rng: &mut ThreadRng) {
         if self.denoms.count() > self.denoms.denom_threshold {
             let res = rng.gen_range(0, self.denoms.count());
             if res > self.denoms.denom_threshold {
@@ -445,7 +123,7 @@ impl Staker {
         self.lock_denom(block_height, &mut rng);
     }
 
-    fn lock_denom(&mut self, block_height: usize, rng: &mut ThreadRng) {
+    fn lock_denom(&mut self, block_height: u64, rng: &mut ThreadRng) {
         use Denom::*;
 
         #[derive(Debug)]
@@ -550,7 +228,7 @@ impl Staker {
         }
     }
 
-    fn update(&mut self, total_supply: usize) {
+    fn update(&mut self, total_supply: u64) {
         self.percent_total = self.balance_spendable as f64 / total_supply as f64;
         self.change_pct = self.percent_total / self.start_pct_total;
     }
@@ -559,7 +237,7 @@ impl Staker {
         !self.denoms.immature.is_empty()
     }
 
-    fn mature_balances(&mut self, block_height: usize) {
+    fn mature_balances(&mut self, block_height: u64) {
         let mature = self
             .denoms
             .immature
@@ -601,8 +279,8 @@ impl Staker {
 #[derive(Debug, Serialize, Deserialize)]
 struct Network {
     stakers: Vec<Staker>,
-    total_supply: usize,
-    block_height: usize,
+    total_supply: u64,
+    block_height: u64,
 }
 
 impl Network {
@@ -619,11 +297,11 @@ impl Network {
         let mut id = 0;
         let log_normal = LogNormal::new(0.1, 1.5).unwrap();
         loop {
-            let mut balance = (log_normal.sample(&mut rand::thread_rng()) * 5_000f64) as usize;
+            let mut balance = (log_normal.sample(&mut rand::thread_rng()) * 5_000f64) as u64;
 
             let left_staking_supply = total_staking_supply - balance as isize;
             if left_staking_supply < 0 {
-                balance = total_staking_supply as usize;
+                balance = total_staking_supply as u64;
                 total_staking_supply = 0;
             } else {
                 total_staking_supply -= balance as isize;
@@ -732,7 +410,7 @@ fn main() {
 
             print!(" [");
             let mut pct_check = 0.0;
-            while pct_check as usize != 100 {
+            while pct_check as u64 != 100 {
                 if pct_done >= pct_check {
                     print!("#");
                 } else {
